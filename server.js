@@ -125,7 +125,7 @@ app.post("/upload-audio", upload.single("audio"), async (req, res) => {
       "https://api.assemblyai.com/v2/transcript",
       {
         audio_url: audioUrl,
-        speech_model: ["universal-2"], // ⭐ REQUIRED FIX
+        speech_models: ["universal-2"], // ⭐ REQUIRED FIX
       },
       {
         headers: {
