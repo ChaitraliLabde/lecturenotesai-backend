@@ -103,30 +103,36 @@ app.post("/upload-audio", upload.single("audio"), async (req, res) => {
       return res.status(400).json({ message: "No file uploaded" });
     }
 
-    // 🔹 Step 1: Upload file
-    const uploadRes = await axios({
-      method: "post",
-      url: "https://api.assemblyai.com/v2/upload",
-      headers: {
-        authorization: ASSEMBLY_API_KEY,
-      },
-      data: fs.createReadStream(file.path),
-    });
+    console.log("📁 File path:", file.path);
+    console.log("📦 File size:", fs.statSync(file.path).size);
+
+    // 🔹 ✅ FIXED: Upload using BUFFER (works reliably on Render)
+    const uploadRes = await axios.post(
+      "https://api.assemblyai.com/v2/upload",
+      fs.readFileSync(file.path),
+      {
+        headers: {
+          authorization: ASSEMBLY_API_KEY,
+          "content-type": "application/octet-stream",
+        },
+      }
+    );
 
     const audioUrl = uploadRes.data.upload_url;
 
     // 🔹 Step 2: Start transcription
-    const transcriptRes = await axios({
-      method: "post",
-      url: "https://api.assemblyai.com/v2/transcript",
-      headers: {
-        authorization: ASSEMBLY_API_KEY,
-        "content-type": "application/json",
-      },
-      data: {
+    const transcriptRes = await axios.post(
+      "https://api.assemblyai.com/v2/transcript",
+      {
         audio_url: audioUrl,
       },
-    });
+      {
+        headers: {
+          authorization: ASSEMBLY_API_KEY,
+          "content-type": "application/json",
+        },
+      }
+    );
 
     const transcriptId = transcriptRes.data.id;
 
@@ -153,13 +159,13 @@ app.post("/upload-audio", upload.single("audio"), async (req, res) => {
 
     console.log("📝 Transcript:", transcript);
 
-    // ✅ DELETE FILE AFTER USE (IMPORTANT)
+    // ✅ DELETE FILE AFTER USE
     fs.unlinkSync(file.path);
 
     res.json({ text: transcript });
 
   } catch (err) {
-    console.error("❌ STT Error:", err.message);
+    console.error("❌ STT Error:", err.response?.data || err.message);
 
     // ✅ CLEANUP FILE EVEN IF ERROR
     if (req.file && fs.existsSync(req.file.path)) {
