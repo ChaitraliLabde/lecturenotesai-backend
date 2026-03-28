@@ -1,8 +1,11 @@
+require("dotenv").config(); // ✅ LOAD ENV
+
 const express = require("express");
 const cors = require("cors");
 const fetch = require("node-fetch");
 const multer = require("multer");
 const fs = require("fs");
+const axios = require("axios");
 
 const app = express();
 
@@ -18,8 +21,9 @@ if (!fs.existsSync("uploads")) {
   fs.mkdirSync("uploads");
 }
 
-/* 🔐 GEMINI KEY (USE ENV VARIABLE IN PRODUCTION) */
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyAkksLoDfshm-xtjBddpbLNSG6fWEPMmfg";
+/* 🔐 KEYS */
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+const ASSEMBLY_API_KEY = process.env.ASSEMBLY_API_KEY || "";
 
 /* 🤖 GEMINI FUNCTION */
 async function generateNotes(transcript, difficulty, aiType) {
@@ -55,14 +59,9 @@ Return JSON:
 
     const data = await response.json();
 
-    console.log("🔍 Gemini Raw Response:", JSON.stringify(data));
-
     let text = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
-    if (!text) {
-      console.log("❌ Gemini returned empty");
-      throw new Error("Empty AI response");
-    }
+    if (!text) throw new Error("Empty AI response");
 
     text = text.replace(/```json|```/g, "").trim();
 
@@ -89,38 +88,94 @@ app.get("/", (req, res) => {
   res.send("Backend is running 🚀");
 });
 
-/* 🎤 STEP 1: UPLOAD AUDIO */
+/* 🎤 STEP 1: UPLOAD AUDIO (AssemblyAI) */
 app.post("/upload-audio", upload.single("audio"), async (req, res) => {
   try {
     console.log("🔥 AUDIO API HIT");
 
+    if (!ASSEMBLY_API_KEY) {
+      return res.status(500).json({ message: "Missing AssemblyAI API key" });
+    }
+
     const file = req.file;
 
     if (!file) {
-      return res.status(400).json({ message: "No audio file uploaded" });
+      return res.status(400).json({ message: "No file uploaded" });
     }
 
-    console.log("📁 File received:", file.filename);
-
-    /* 🔥 MOCK TRANSCRIPT */
-    const transcript =
-      "Artificial Intelligence is the simulation of human intelligence by machines.";
-
-    res.json({
-      text: transcript
+    // 🔹 Step 1: Upload file
+    const uploadRes = await axios({
+      method: "post",
+      url: "https://api.assemblyai.com/v2/upload",
+      headers: {
+        authorization: ASSEMBLY_API_KEY,
+      },
+      data: fs.createReadStream(file.path),
     });
 
+    const audioUrl = uploadRes.data.upload_url;
+
+    // 🔹 Step 2: Start transcription
+    const transcriptRes = await axios({
+      method: "post",
+      url: "https://api.assemblyai.com/v2/transcript",
+      headers: {
+        authorization: ASSEMBLY_API_KEY,
+        "content-type": "application/json",
+      },
+      data: {
+        audio_url: audioUrl,
+      },
+    });
+
+    const transcriptId = transcriptRes.data.id;
+
+    // 🔹 Step 3: Poll result
+    let transcript = "";
+
+    while (true) {
+      const polling = await axios.get(
+        `https://api.assemblyai.com/v2/transcript/${transcriptId}`,
+        {
+          headers: { authorization: ASSEMBLY_API_KEY },
+        }
+      );
+
+      if (polling.data.status === "completed") {
+        transcript = polling.data.text;
+        break;
+      } else if (polling.data.status === "error") {
+        throw new Error("Transcription failed");
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+
+    console.log("📝 Transcript:", transcript);
+
+    // ✅ DELETE FILE AFTER USE (IMPORTANT)
+    fs.unlinkSync(file.path);
+
+    res.json({ text: transcript });
+
   } catch (err) {
-    console.error("❌ Upload Error:", err.message);
-    res.status(500).json({ message: "Upload failed" });
+    console.error("❌ STT Error:", err.message);
+
+    // ✅ CLEANUP FILE EVEN IF ERROR
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+
+    res.status(500).json({ message: "STT failed" });
   }
 });
 
 /* 🤖 STEP 2: GENERATE NOTES */
 app.post("/generate-notes", async (req, res) => {
   try {
-    console.log("🔥 NOTES API HIT");
-    console.log("📦 Body:", req.body);
+    if (!GEMINI_API_KEY) {
+      return res.status(500).json({ message: "Missing Gemini API key" });
+    }
 
     const body = req.body || {};
 
@@ -133,8 +188,6 @@ app.post("/generate-notes", async (req, res) => {
     }
 
     const notes = await generateNotes(transcript, difficulty, aiType);
-
-    console.log("✅ Notes Generated");
 
     res.json({
       topic: notes.topic,
@@ -149,7 +202,7 @@ app.post("/generate-notes", async (req, res) => {
   }
 });
 
-/* 🚀 START SERVER (FIXED FOR DEPLOYMENT) */
+/* 🚀 START SERVER */
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, "0.0.0.0", () => {
