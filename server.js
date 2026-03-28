@@ -88,7 +88,7 @@ app.get("/", (req, res) => {
   res.send("Backend is running 🚀");
 });
 
-/* 🎤 STEP 1: UPLOAD AUDIO (AssemblyAI) */
+/* 🎤 STEP 1: UPLOAD AUDIO */
 app.post("/upload-audio", upload.single("audio"), async (req, res) => {
   try {
     console.log("🔥 AUDIO API HIT");
@@ -106,7 +106,7 @@ app.post("/upload-audio", upload.single("audio"), async (req, res) => {
     console.log("📁 File path:", file.path);
     console.log("📦 File size:", fs.statSync(file.path).size);
 
-    // 🔹 ✅ FIXED: Upload using BUFFER (works reliably on Render)
+    // ✅ Upload file to AssemblyAI
     const uploadRes = await axios.post(
       "https://api.assemblyai.com/v2/upload",
       fs.readFileSync(file.path),
@@ -120,11 +120,12 @@ app.post("/upload-audio", upload.single("audio"), async (req, res) => {
 
     const audioUrl = uploadRes.data.upload_url;
 
-    // 🔹 Step 2: Start transcription
+    // ✅ START TRANSCRIPTION (FIXED HERE 🔥)
     const transcriptRes = await axios.post(
       "https://api.assemblyai.com/v2/transcript",
       {
         audio_url: audioUrl,
+        speech_model: "universal-2", // ⭐ REQUIRED FIX
       },
       {
         headers: {
@@ -136,7 +137,7 @@ app.post("/upload-audio", upload.single("audio"), async (req, res) => {
 
     const transcriptId = transcriptRes.data.id;
 
-    // 🔹 Step 3: Poll result
+    // 🔄 Polling
     let transcript = "";
 
     while (true) {
@@ -159,15 +160,13 @@ app.post("/upload-audio", upload.single("audio"), async (req, res) => {
 
     console.log("📝 Transcript:", transcript);
 
-    // ✅ DELETE FILE AFTER USE
-    fs.unlinkSync(file.path);
+    fs.unlinkSync(file.path); // cleanup
 
     res.json({ text: transcript });
 
   } catch (err) {
     console.error("❌ STT Error:", err.response?.data || err.message);
 
-    // ✅ CLEANUP FILE EVEN IF ERROR
     if (req.file && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
     }
@@ -195,12 +194,7 @@ app.post("/generate-notes", async (req, res) => {
 
     const notes = await generateNotes(transcript, difficulty, aiType);
 
-    res.json({
-      topic: notes.topic,
-      definition: notes.definition,
-      key_points: notes.key_points,
-      exam_tips: notes.exam_tips,
-    });
+    res.json(notes);
 
   } catch (err) {
     console.error("❌ Server Error:", err.message);
