@@ -1,4 +1,4 @@
-require("dotenv").config(); // ✅ LOAD ENV
+require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
@@ -25,25 +25,44 @@ if (!fs.existsSync("uploads")) {
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const ASSEMBLY_API_KEY = process.env.ASSEMBLY_API_KEY || "";
 
-/* 🤖 GEMINI FUNCTION */
-async function generateNotes(transcript, difficulty, aiType) {
+/* 🤖 GEMINI FUNCTION (🔥 UPDATED) */
+async function generateNotes(transcript, difficulty, aiType, language) {
   try {
     const prompt = `
-Convert this transcript into structured notes.
+Convert the lecture transcript into structured notes.
+
+STRICT RULES:
+
+1. Difficulty:
+- easy → very simple language
+- medium → moderate explanation
+- hard → detailed explanation
+
+2. AI Mode:
+- simple → beginner friendly
+- smart → deep explanation with examples
+
+3. Language:
+- Output MUST be in ${language}
+- If Hindi → use simple Hindi
+- If Marathi → use natural Marathi (not overly formal)
+- If English → use clear English
+- DO NOT mix languages
+
+4. Output format (STRICT JSON ONLY):
+{
+  "topic": "...",
+  "definition": "...",
+  "key_points": "...",
+  "exam_tips": "..."
+}
 
 Transcript:
 ${transcript}
 
 Difficulty: ${difficulty}
-AI Type: ${aiType}
-
-Return JSON:
-{
-  "topic": "",
-  "definition": "",
-  "key_points": "",
-  "exam_tips": ""
-}
+AI Mode: ${aiType}
+Language: ${language}
 `;
 
     const response = await fetch(
@@ -88,7 +107,7 @@ app.get("/", (req, res) => {
   res.send("Backend is running 🚀");
 });
 
-/* 🎤 STEP 1: UPLOAD AUDIO */
+/* 🎤 UPLOAD AUDIO */
 app.post("/upload-audio", upload.single("audio"), async (req, res) => {
   try {
     console.log("🔥 AUDIO API HIT");
@@ -103,10 +122,6 @@ app.post("/upload-audio", upload.single("audio"), async (req, res) => {
       return res.status(400).json({ message: "No file uploaded" });
     }
 
-    console.log("📁 File path:", file.path);
-    console.log("📦 File size:", fs.statSync(file.path).size);
-
-    // ✅ Upload file to AssemblyAI
     const uploadRes = await axios.post(
       "https://api.assemblyai.com/v2/upload",
       fs.readFileSync(file.path),
@@ -120,12 +135,11 @@ app.post("/upload-audio", upload.single("audio"), async (req, res) => {
 
     const audioUrl = uploadRes.data.upload_url;
 
-    // ✅ START TRANSCRIPTION (FIXED HERE 🔥)
     const transcriptRes = await axios.post(
       "https://api.assemblyai.com/v2/transcript",
       {
         audio_url: audioUrl,
-        speech_models: ["universal-2"], // ⭐ REQUIRED FIX
+        speech_models: ["universal-2"],
       },
       {
         headers: {
@@ -137,7 +151,6 @@ app.post("/upload-audio", upload.single("audio"), async (req, res) => {
 
     const transcriptId = transcriptRes.data.id;
 
-    // 🔄 Polling
     let transcript = "";
 
     while (true) {
@@ -158,9 +171,7 @@ app.post("/upload-audio", upload.single("audio"), async (req, res) => {
       await new Promise((resolve) => setTimeout(resolve, 3000));
     }
 
-    console.log("📝 Transcript:", transcript);
-
-    fs.unlinkSync(file.path); // cleanup
+    fs.unlinkSync(file.path);
 
     res.json({ text: transcript });
 
@@ -175,7 +186,7 @@ app.post("/upload-audio", upload.single("audio"), async (req, res) => {
   }
 });
 
-/* 🤖 STEP 2: GENERATE NOTES */
+/* 🤖 GENERATE NOTES (🔥 UPDATED) */
 app.post("/generate-notes", async (req, res) => {
   try {
     if (!GEMINI_API_KEY) {
@@ -187,12 +198,15 @@ app.post("/generate-notes", async (req, res) => {
     const transcript = body.transcript;
     const difficulty = body.difficulty || "easy";
     const aiType = body.aiType || "simple";
+    const language = body.language || "English"; // ✅ NEW
 
     if (!transcript) {
       return res.status(400).json({ message: "No transcript received" });
     }
 
-    const notes = await generateNotes(transcript, difficulty, aiType);
+    console.log("🌍 Language:", language);
+
+    const notes = await generateNotes(transcript, difficulty, aiType, language);
 
     res.json(notes);
 
