@@ -25,9 +25,12 @@ if (!fs.existsSync("uploads")) {
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const ASSEMBLY_API_KEY = process.env.ASSEMBLY_API_KEY || "";
 
-/* 🤖 GEMINI FUNCTION (🔥 UPDATED) */
+/* 🤖 GEMINI FUNCTION (🔥 FIXED) */
 async function generateNotes(transcript, difficulty, aiType, language) {
   try {
+    // ✅ LIMIT TRANSCRIPT SIZE (VERY IMPORTANT)
+    const trimmedTranscript = transcript.slice(0, 8000);
+
     const prompt = `
 Convert the lecture transcript into structured notes.
 
@@ -58,7 +61,7 @@ STRICT RULES:
 }
 
 Transcript:
-${transcript}
+${trimmedTranscript}
 
 Difficulty: ${difficulty}
 AI Mode: ${aiType}
@@ -72,16 +75,37 @@ Language: ${language}
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 1024,
+          },
         }),
       }
     );
 
     const data = await response.json();
 
-    let text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    // ✅ FULL DEBUG LOG
+    console.log("🔥 FULL GEMINI RESPONSE:", JSON.stringify(data, null, 2));
 
-    if (!text) throw new Error("Empty AI response");
+    // ✅ HANDLE BLOCKED / EMPTY
+    if (!data.candidates) {
+      console.error("❌ Gemini blocked or empty:", data);
+      throw new Error("Gemini returned no candidates");
+    }
 
+    // ✅ SAFE TEXT EXTRACTION
+    let text = "";
+    if (data.candidates.length > 0) {
+      const parts = data.candidates[0].content.parts;
+      text = parts.map(p => p.text).join("");
+    }
+
+    if (!text || text.trim() === "") {
+      throw new Error("Empty AI response");
+    }
+
+    // ✅ CLEAN RESPONSE
     text = text.replace(/```json|```/g, "").trim();
 
     const match = text.match(/\{[\s\S]*\}/);
@@ -186,7 +210,7 @@ app.post("/upload-audio", upload.single("audio"), async (req, res) => {
   }
 });
 
-/* 🤖 GENERATE NOTES (🔥 UPDATED) */
+/* 🤖 GENERATE NOTES */
 app.post("/generate-notes", async (req, res) => {
   try {
     if (!GEMINI_API_KEY) {
@@ -198,7 +222,7 @@ app.post("/generate-notes", async (req, res) => {
     const transcript = body.transcript;
     const difficulty = body.difficulty || "easy";
     const aiType = body.aiType || "simple";
-    const language = body.language || "English"; // ✅ NEW
+    const language = body.language || "English";
 
     if (!transcript) {
       return res.status(400).json({ message: "No transcript received" });
