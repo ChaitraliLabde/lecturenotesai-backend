@@ -25,13 +25,17 @@ if (!fs.existsSync("uploads")) {
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const ASSEMBLY_API_KEY = process.env.ASSEMBLY_API_KEY || "";
 
-/* 🤖 GEMINI FUNCTION (🔥 FIXED) */
+/* 🤖 GEMINI FUNCTION (🔥 FINAL FIX WITH RETRY) */
 async function generateNotes(transcript, difficulty, aiType, language) {
-  try {
-    // ✅ LIMIT TRANSCRIPT SIZE (VERY IMPORTANT)
-    const trimmedTranscript = transcript.slice(0, 8000);
 
-    const prompt = `
+  let retries = 3; // ✅ retry count
+
+  while (retries > 0) {
+    try {
+      // ✅ LIMIT TRANSCRIPT SIZE
+      const trimmedTranscript = transcript.slice(0, 8000);
+
+      const prompt = `
 Convert the lecture transcript into structured notes.
 
 STRICT RULES:
@@ -47,9 +51,6 @@ STRICT RULES:
 
 3. Language:
 - Output MUST be in ${language}
-- If Hindi → use simple Hindi
-- If Marathi → use natural Marathi (not overly formal)
-- If English → use clear English
 - DO NOT mix languages
 
 4. Output format (STRICT JSON ONLY):
@@ -68,62 +69,72 @@ AI Mode: ${aiType}
 Language: ${language}
 `;
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 1024,
-          },
-        }),
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: 0.7,
+              maxOutputTokens: 1024,
+            },
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      console.log("🔥 FULL GEMINI RESPONSE:", JSON.stringify(data, null, 2));
+
+      // ❌ HANDLE 503 ERROR (HIGH DEMAND)
+      if (data.error && data.error.code === 503) {
+        console.log("⏳ Gemini busy... retrying...");
+        retries--;
+        await new Promise(res => setTimeout(res, 2000));
+        continue;
       }
-    );
 
-    const data = await response.json();
+      // ❌ NO CANDIDATES
+      if (!data.candidates) {
+        throw new Error("Gemini returned no candidates");
+      }
 
-    // ✅ FULL DEBUG LOG
-    console.log("🔥 FULL GEMINI RESPONSE:", JSON.stringify(data, null, 2));
+      // ✅ SAFE TEXT EXTRACTION
+      let text = "";
+      if (data.candidates.length > 0) {
+        const parts = data.candidates[0].content.parts;
+        text = parts.map(p => p.text).join("");
+      }
 
-    // ✅ HANDLE BLOCKED / EMPTY
-    if (!data.candidates) {
-      console.error("❌ Gemini blocked or empty:", data);
-      throw new Error("Gemini returned no candidates");
+      if (!text || text.trim() === "") {
+        throw new Error("Empty AI response");
+      }
+
+      // ✅ CLEAN RESPONSE
+      text = text.replace(/```json|```/g, "").trim();
+
+      const match = text.match(/\{[\s\S]*\}/);
+
+      if (!match) throw new Error("Invalid JSON from AI");
+
+      return JSON.parse(match[0]);
+
+    } catch (err) {
+      console.error("⚠️ Gemini Retry Error:", err.message);
+      retries--;
+      await new Promise(res => setTimeout(res, 2000));
     }
-
-    // ✅ SAFE TEXT EXTRACTION
-    let text = "";
-    if (data.candidates.length > 0) {
-      const parts = data.candidates[0].content.parts;
-      text = parts.map(p => p.text).join("");
-    }
-
-    if (!text || text.trim() === "") {
-      throw new Error("Empty AI response");
-    }
-
-    // ✅ CLEAN RESPONSE
-    text = text.replace(/```json|```/g, "").trim();
-
-    const match = text.match(/\{[\s\S]*\}/);
-
-    if (!match) throw new Error("Invalid JSON from AI");
-
-    return JSON.parse(match[0]);
-
-  } catch (err) {
-    console.error("❌ Gemini Error:", err.message);
-
-    return {
-      topic: "Fallback Topic",
-      definition: "Fallback definition",
-      key_points: "1. Point\n2. Point",
-      exam_tips: "Revise properly",
-    };
   }
+
+  // ✅ FINAL FALLBACK (after retries fail)
+  return {
+    topic: "AI Busy - Try Again",
+    definition: "Servers are overloaded. Please try again.",
+    key_points: "1. Retry after few seconds\n2. Try shorter audio\n3. Check internet",
+    exam_tips: "Retry again later"
+  };
 }
 
 /* ✅ TEST ROUTE */
