@@ -25,15 +25,15 @@ if (!fs.existsSync("uploads")) {
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const ASSEMBLY_API_KEY = process.env.ASSEMBLY_API_KEY || "";
 
-/* 🤖 GEMINI FUNCTION (🔥 FINAL FIX WITH RETRY) */
+/* 🤖 GEMINI FUNCTION (🔥 FINAL STABLE FIX) */
 async function generateNotes(transcript, difficulty, aiType, language) {
 
-  let retries = 3; // ✅ retry count
+  let retries = 3;
 
   while (retries > 0) {
     try {
-      // ✅ LIMIT TRANSCRIPT SIZE
-      const trimmedTranscript = transcript.slice(0, 8000);
+
+      const trimmedTranscript = transcript.slice(0, 6000); // 🔥 REDUCED to avoid token overflow
 
       const prompt = `
 Convert the lecture transcript into structured notes.
@@ -78,7 +78,7 @@ Language: ${language}
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: {
               temperature: 0.7,
-              maxOutputTokens: 1024,
+              maxOutputTokens: 2048, // 🔥 INCREASED (VERY IMPORTANT)
             },
           }),
         }
@@ -88,20 +88,19 @@ Language: ${language}
 
       console.log("🔥 FULL GEMINI RESPONSE:", JSON.stringify(data, null, 2));
 
-      // ❌ HANDLE 503 ERROR (HIGH DEMAND)
+      /* ❌ HANDLE SERVER BUSY */
       if (data.error && data.error.code === 503) {
         console.log("⏳ Gemini busy... retrying...");
         retries--;
-        await new Promise(res => setTimeout(res, 2000));
+        await new Promise(res => setTimeout(res, 2500));
         continue;
       }
 
-      // ❌ NO CANDIDATES
       if (!data.candidates) {
-        throw new Error("Gemini returned no candidates");
+        throw new Error("No candidates from Gemini");
       }
 
-      // ✅ SAFE TEXT EXTRACTION
+      /* ✅ EXTRACT TEXT */
       let text = "";
       if (data.candidates.length > 0) {
         const parts = data.candidates[0].content.parts;
@@ -112,28 +111,40 @@ Language: ${language}
         throw new Error("Empty AI response");
       }
 
-      // ✅ CLEAN RESPONSE
+      /* ✅ CLEAN TEXT */
       text = text.replace(/```json|```/g, "").trim();
 
-      const match = text.match(/\{[\s\S]*\}/);
+      /* 🔥 HANDLE CUT JSON (IMPORTANT FIX) */
+      let jsonString = text;
 
-      if (!match) throw new Error("Invalid JSON from AI");
+      // try normal parse
+      try {
+        return JSON.parse(jsonString);
+      } catch (e) {
 
-      return JSON.parse(match[0]);
+        // 🔥 FIX: attempt to close broken JSON
+        const lastBrace = jsonString.lastIndexOf("}");
+        if (lastBrace !== -1) {
+          jsonString = jsonString.substring(0, lastBrace + 1);
+          return JSON.parse(jsonString);
+        }
+
+        throw new Error("Invalid JSON after fixing");
+      }
 
     } catch (err) {
       console.error("⚠️ Gemini Retry Error:", err.message);
       retries--;
-      await new Promise(res => setTimeout(res, 2000));
+      await new Promise(res => setTimeout(res, 2500));
     }
   }
 
-  // ✅ FINAL FALLBACK (after retries fail)
+  /* ✅ FINAL FALLBACK */
   return {
     topic: "AI Busy - Try Again",
-    definition: "Servers are overloaded. Please try again.",
-    key_points: "1. Retry after few seconds\n2. Try shorter audio\n3. Check internet",
-    exam_tips: "Retry again later"
+    definition: "Servers are overloaded or response was incomplete.",
+    key_points: "1. Retry after few seconds\n2. Try smaller audio\n3. Check connection",
+    exam_tips: "Try again later"
   };
 }
 
