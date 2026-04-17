@@ -25,7 +25,36 @@ if (!fs.existsSync("uploads")) {
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const ASSEMBLY_API_KEY = process.env.ASSEMBLY_API_KEY || "";
 
-/* 🤖 GEMINI FUNCTION (🔥 FINAL STABLE FIX) */
+/* 🔥 SAFE JSON EXTRACTOR (VERY IMPORTANT) */
+function extractJSON(text) {
+  try {
+    text = text.replace(/```json|```/g, "").trim();
+
+    let start = text.indexOf("{");
+    let end = text.lastIndexOf("}");
+
+    if (start !== -1 && end !== -1) {
+      let jsonString = text.substring(start, end + 1);
+      let parsed = JSON.parse(jsonString);
+
+      /* 🔥 FIX: convert arrays → string (Android safe) */
+      if (Array.isArray(parsed.key_points)) {
+        parsed.key_points = parsed.key_points.join("\n");
+      }
+      if (Array.isArray(parsed.exam_tips)) {
+        parsed.exam_tips = parsed.exam_tips.join("\n");
+      }
+
+      return parsed;
+    }
+
+    throw new Error("No valid JSON found");
+  } catch (e) {
+    throw new Error("Invalid JSON after fixing");
+  }
+}
+
+/* 🤖 GEMINI FUNCTION */
 async function generateNotes(transcript, difficulty, aiType, language) {
 
   let retries = 3;
@@ -33,7 +62,7 @@ async function generateNotes(transcript, difficulty, aiType, language) {
   while (retries > 0) {
     try {
 
-      const trimmedTranscript = transcript.slice(0, 6000); // 🔥 REDUCED to avoid token overflow
+      const trimmedTranscript = transcript.slice(0, 5000); // 🔥 safer limit
 
       const prompt = `
 Convert the lecture transcript into structured notes.
@@ -53,7 +82,10 @@ STRICT RULES:
 - Output MUST be in ${language}
 - DO NOT mix languages
 
-4. Output format (STRICT JSON ONLY):
+4. Output format (STRICT JSON ONLY, KEEP RESPONSE SHORT):
+- key_points → max 5 points
+- exam_tips → max 4 tips
+
 {
   "topic": "...",
   "definition": "...",
@@ -78,7 +110,7 @@ Language: ${language}
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: {
               temperature: 0.7,
-              maxOutputTokens: 2048, // 🔥 INCREASED (VERY IMPORTANT)
+              maxOutputTokens: 2048,
             },
           }),
         }
@@ -88,7 +120,7 @@ Language: ${language}
 
       console.log("🔥 FULL GEMINI RESPONSE:", JSON.stringify(data, null, 2));
 
-      /* ❌ HANDLE SERVER BUSY */
+      /* ❌ HANDLE 503 */
       if (data.error && data.error.code === 503) {
         console.log("⏳ Gemini busy... retrying...");
         retries--;
@@ -111,26 +143,8 @@ Language: ${language}
         throw new Error("Empty AI response");
       }
 
-      /* ✅ CLEAN TEXT */
-      text = text.replace(/```json|```/g, "").trim();
-
-      /* 🔥 HANDLE CUT JSON (IMPORTANT FIX) */
-      let jsonString = text;
-
-      // try normal parse
-      try {
-        return JSON.parse(jsonString);
-      } catch (e) {
-
-        // 🔥 FIX: attempt to close broken JSON
-        const lastBrace = jsonString.lastIndexOf("}");
-        if (lastBrace !== -1) {
-          jsonString = jsonString.substring(0, lastBrace + 1);
-          return JSON.parse(jsonString);
-        }
-
-        throw new Error("Invalid JSON after fixing");
-      }
+      /* ✅ FINAL PARSE */
+      return extractJSON(text);
 
     } catch (err) {
       console.error("⚠️ Gemini Retry Error:", err.message);
@@ -139,11 +153,11 @@ Language: ${language}
     }
   }
 
-  /* ✅ FINAL FALLBACK */
+  /* ✅ FALLBACK */
   return {
     topic: "AI Busy - Try Again",
-    definition: "Servers are overloaded or response was incomplete.",
-    key_points: "1. Retry after few seconds\n2. Try smaller audio\n3. Check connection",
+    definition: "Servers are overloaded or response incomplete.",
+    key_points: "1. Retry after few seconds\n2. Try shorter audio\n3. Check internet",
     exam_tips: "Try again later"
   };
 }
